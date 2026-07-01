@@ -1,6 +1,4 @@
 from functools import lru_cache
-from typing import Any
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -23,22 +21,9 @@ class Settings(BaseSettings):
     # ── Redis / Celery ────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # ── CORS ──────────────────────────────────────────────────────────────────
-    # Accepte : liste JSON ["url1","url2"] OU chaîne séparée par virgules url1,url2
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
-
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def parse_origins(cls, v: Any) -> list[str]:
-        if isinstance(v, list):
-            return v
-        if isinstance(v, str):
-            v = v.strip()
-            if v.startswith("["):
-                import json
-                return json.loads(v)
-            return [o.strip() for o in v.split(",") if o.strip()]
-        return [str(v)]
+    # ── CORS — stocké comme str, exposé comme list via la propriété ───────────
+    # Passer en variable Railway : url1,url2  (séparées par virgule)
+    ALLOWED_ORIGINS_STR: str = "http://localhost:3000"
 
     # ── FlexPay ───────────────────────────────────────────────────────────────
     FLEXPAY_TOKEN: str = ""
@@ -67,6 +52,10 @@ class Settings(BaseSettings):
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     RATE_LIMIT_PER_MINUTE: int = 60
+
+    @property
+    def ALLOWED_ORIGINS(self) -> list[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS_STR.split(",") if o.strip()]
 
     @property
     def DATABASE_URL_ASYNC(self) -> str:
