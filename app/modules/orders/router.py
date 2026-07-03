@@ -12,6 +12,7 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.modules.orders.models import Order, OrderItem, OrderStatus
 from app.modules.products.models import Product
 from pydantic import BaseModel
+from loguru import logger
 
 router = APIRouter()
 
@@ -49,17 +50,28 @@ async def create_order(
     order_items = []
 
     for item_in in body.items:
+        # FOR UPDATE : lock pessimiste — empêche deux commandes simultanées
+        # de lire le même stock et de le dépasser (race condition critique)
         result = await db.execute(
-            select(Product).where(
+            select(Product)
+            .where(
                 Product.id == item_in.product_id,
                 Product.tenant_id == tenant.id,
                 Product.is_active == True,
             )
+            .with_for_update()
         )
         product = result.scalar_one_or_none()
         if not product:
             raise NotFoundError(f"Produit {item_in.product_id}")
         if product.stock_qty < item_in.quantity:
+            logger.warning(
+                "stock_insuffisant",
+                product_id=str(product.id),
+                requested=item_in.quantity,
+                available=product.stock_qty,
+                customer_id=str(current_user.id),
+            )
             raise ValidationError(f"Stock insuffisant pour '{product.name}' (dispo: {product.stock_qty})")
 
         unit_price = product.price_promo or product.price
@@ -72,7 +84,6 @@ async def create_order(
             unit_price=unit_price,
             subtotal=subtotal,
         ))
-        # Déduire du stock
         product.stock_qty -= item_in.quantity
 
     order = Order(

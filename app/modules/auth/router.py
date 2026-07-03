@@ -55,11 +55,11 @@ async def send_otp(
     db: AsyncSession = Depends(get_db),
 ):
     otp = generate_otp()
-    # Stocke l'OTP dans Redis avec expiration 10 min
+    # Hash avant stockage — si Redis est compromis, les OTP restent opaques
+    hashed = hash_password(otp)
     from app.tasks.celery_app import redis_client
-    await redis_client.setex(f"otp:{body.phone}", 600, otp)
+    await redis_client.setex(f"otp:{body.phone}", 600, hashed)
 
-    # Envoi SMS (Twilio) avec fallback WhatsApp
     from app.modules.notifications.twilio import twilio_client
     background_tasks.add_task(twilio_client.send_otp, body.phone, otp)
 
@@ -71,7 +71,7 @@ async def verify_otp(body: OTPVerifyRequest):
     from app.tasks.celery_app import redis_client
     stored = await redis_client.get(f"otp:{body.phone}")
 
-    if not stored or stored.decode() != body.code:
+    if not stored or not verify_password(body.code, stored.decode()):
         raise AuthError("Code OTP invalide ou expiré")
 
     await redis_client.delete(f"otp:{body.phone}")

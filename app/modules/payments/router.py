@@ -86,19 +86,35 @@ async def flexpay_webhook(
     status_map = {"0": PaymentStatus.SUCCESS, "1": PaymentStatus.PENDING, "2": PaymentStatus.FAILED}
     new_status = status_map.get(raw_status, PaymentStatus.FAILED)
 
+    # Idempotence : un webhook reçu 2x ne doit pas changer le statut 2x
     result = await db.execute(
         select(Payment).where(Payment.provider_ref == order_number)
     )
     payment = result.scalar_one_or_none()
 
     if payment:
+        if payment.status == new_status:
+            # Déjà traité — répondre 200 sans rien faire
+            logger.info(f"[FlexPay webhook] idempotent skip order_number={order_number}")
+            return {"received": True}
+
+        # Vérifier que le paiement appartient bien au tenant concerné (isolation)
+        if payment.tenant_id is None:
+            logger.error(f"[FlexPay webhook] payment sans tenant_id : {payment.id}")
+            return {"received": True}
+
         payment.status = new_status
         payment.webhook_received_at = datetime.now(timezone.utc)
 
         if new_status == PaymentStatus.SUCCESS and payment.order_id:
-            order_result = await db.execute(select(Order).where(Order.id == payment.order_id))
+            order_result = await db.execute(
+                select(Order).where(
+                    Order.id == payment.order_id,
+                    Order.tenant_id == payment.tenant_id,  # isolation tenant
+                )
+            )
             order = order_result.scalar_one_or_none()
-            if order:
+            if order and order.status != OrderStatus.CONFIRMED:
                 order.status = OrderStatus.CONFIRMED
                 background_tasks.add_task(
                     _send_payment_confirmation,

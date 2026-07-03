@@ -30,7 +30,7 @@ def _create_token(data: dict, expires_delta: timedelta, token_type: str) -> str:
         "iat": datetime.now(timezone.utc),
         "type": token_type,
     })
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return jwt.encode(payload, settings.secret_key_safe, algorithm=settings.ALGORITHM)
 
 
 def create_access_token(data: dict) -> str:
@@ -51,7 +51,7 @@ def create_refresh_token(data: dict) -> str:
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return jwt.decode(token, settings.secret_key_safe, algorithms=[settings.ALGORITHM])
     except JWTError as e:
         raise ValueError(f"Token invalide : {e}") from e
 

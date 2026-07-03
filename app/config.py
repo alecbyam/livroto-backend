@@ -1,5 +1,11 @@
 from functools import lru_cache
+import secrets
 from pydantic_settings import BaseSettings
+
+
+def _default_secret() -> str:
+    """En dev, génère un secret aléatoire. En prod, Railway fournit SECRET_KEY."""
+    return secrets.token_hex(32)
 
 
 class Settings(BaseSettings):
@@ -10,7 +16,7 @@ class Settings(BaseSettings):
     BASE_URL: str = "http://localhost:8000"
 
     # ── Auth ──────────────────────────────────────────────────────────────────
-    SECRET_KEY: str = "dev-secret-change-in-production-minimum-32-chars"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -71,6 +77,19 @@ class Settings(BaseSettings):
         return f"https://graph.facebook.com/{self.WHATSAPP_API_VERSION}"
 
     model_config = {"env_file": ".env", "case_sensitive": True}
+
+    @property
+    def secret_key_safe(self) -> str:
+        """Retourne SECRET_KEY ou lève une erreur claire si vide en prod."""
+        if not self.SECRET_KEY:
+            if not self.DEBUG:
+                raise RuntimeError(
+                    "SECRET_KEY est vide — configurez-la dans Railway (Settings → Variables). "
+                    "Générez avec : python -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            # Dev only : génère un secret éphémère (différent à chaque restart)
+            return _default_secret()
+        return self.SECRET_KEY
 
 
 @lru_cache

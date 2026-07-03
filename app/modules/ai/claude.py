@@ -1,9 +1,13 @@
 """
 Claude API (Anthropic) — IA pour support client, marketing, finance, analyse.
 """
+import asyncio
 import anthropic
 from loguru import logger
 from app.config import settings
+
+# Timeout global pour tous les appels Claude (réseau 2G RDC)
+_CLAUDE_TIMEOUT_S = 15.0
 
 
 class AIClient:
@@ -19,13 +23,25 @@ class AIClient:
             self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         return self._client
 
-    def _call(self, system: str, user_message: str, max_tokens: int = 1024) -> str:
-        message = self.client.messages.create(
-            model=settings.CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user_message}],
-        )
+    async def _call(self, system: str, user_message: str, max_tokens: int = 1024) -> str:
+        """Appel async avec timeout — évite de bloquer le serveur si Claude est lent."""
+        loop = asyncio.get_running_loop()
+        try:
+            message = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self.client.messages.create(
+                        model=settings.CLAUDE_MODEL,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=[{"role": "user", "content": user_message}],
+                    ),
+                ),
+                timeout=_CLAUDE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[Claude] Timeout après {_CLAUDE_TIMEOUT_S}s")
+            raise
         return message.content[0].text
 
     async def customer_support(self, question: str, context: dict | None = None) -> str:
@@ -44,7 +60,9 @@ Si la question dépasse tes capacités, propose de contacter un agent humain via
             ctx_text = f"\n\nContexte : {context}"
 
         try:
-            return self._call(system, question + ctx_text, max_tokens=512)
+            return await self._call(system, question + ctx_text, max_tokens=512)
+        except asyncio.TimeoutError:
+            return "Je suis momentanément indisponible. Contactez-nous directement sur WhatsApp."
         except Exception as e:
             logger.error(f"[Claude support] erreur : {e}")
             return "Je suis momentanément indisponible. Contactez-nous directement sur WhatsApp."
@@ -66,8 +84,8 @@ Règles : max 3 lignes, émojis, ton chaleureux et africain, appel à l'action c
 Public : PME et particuliers à Bunia, RDC."""
 
         try:
-            return self._call("Tu es un expert en marketing digital africain.", prompt, max_tokens=200)
-        except Exception as e:
+            return await self._call("Tu es un expert en marketing digital africain.", prompt, max_tokens=200)
+        except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"[Claude marketing] erreur : {e}")
             return f"🔥 {product_name} disponible à {price} {currency} ! Commandez maintenant."
 
@@ -84,12 +102,12 @@ Données : {sales_data}
 Réponds en français, max 300 mots, contexte PME en RDC."""
 
         try:
-            return self._call(
+            return await self._call(
                 "Tu es un analyste financier spécialisé dans les PME africaines.",
                 prompt,
                 max_tokens=600,
             )
-        except Exception as e:
+        except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"[Claude analytics] erreur : {e}")
             return "Analyse temporairement indisponible."
 
@@ -108,12 +126,12 @@ Format : résumé exécutif (3 paragraphes), points clés, recommandations.
 Adapté à un gérant de PME à Bunia, RDC."""
 
         try:
-            return self._call(
+            return await self._call(
                 "Tu es un consultant financier pour PME africaines.",
                 prompt,
                 max_tokens=800,
             )
-        except Exception as e:
+        except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"[Claude finance] erreur : {e}")
             return "Rapport financier temporairement indisponible."
 
@@ -127,10 +145,10 @@ Format attendu :
 
         try:
             import json
-            raw = self._call("Tu es un classificateur de tickets support.", prompt, max_tokens=150)
+            raw = await self._call("Tu es un classificateur de tickets support.", prompt, max_tokens=150)
             raw = raw.strip().removeprefix("```json").removesuffix("```").strip()
             return json.loads(raw)
-        except Exception:
+        except (asyncio.TimeoutError, Exception):
             return {"category": "autre", "urgency": "medium", "language": "fr", "summary": message[:50]}
 
 
