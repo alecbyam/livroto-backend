@@ -7,8 +7,8 @@ import math
 
 from app.database import get_db
 from app.dependencies import get_current_user, get_current_tenant
-from app.core.rbac import Role, require_min_role
-from app.core.exceptions import NotFoundError
+from app.core.rbac import Role, ROLE_HIERARCHY, role_level, require_min_role
+from app.core.exceptions import NotFoundError, ForbiddenError
 from app.modules.location.models import LocationTracking
 from app.modules.orders.models import Order
 
@@ -27,7 +27,7 @@ class PositionUpdate(BaseModel):
 async def update_position(
     body: PositionUpdate,
     tenant=Depends(get_current_tenant),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_min_role(Role.RIDER)),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -37,6 +37,15 @@ async def update_position(
     if not (-90 <= body.latitude <= 90) or not (-180 <= body.longitude <= 180):
         from app.core.exceptions import ValidationError
         raise ValidationError("Coordonnées GPS invalides")
+
+    if body.order_id:
+        # Un livreur ne peut pousser une position rattachée qu'à une commande qui lui est assignée.
+        order_result = await db.execute(
+            select(Order).where(Order.id == body.order_id, Order.tenant_id == tenant.id)
+        )
+        order = order_result.scalar_one_or_none()
+        if not order or order.rider_id != current_user.id:
+            raise ForbiddenError("Cette commande ne t'est pas assignée")
 
     loc = LocationTracking(
         tenant_id=tenant.id,
@@ -55,10 +64,10 @@ async def update_position(
 async def get_rider_current_position(
     rider_id: uuid.UUID,
     tenant=Depends(get_current_tenant),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_min_role(Role.MANAGER)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dernière position connue d'un livreur."""
+    """Dernière position connue d'un livreur (dispatch/audit — réservé aux managers+)."""
     result = await db.execute(
         select(LocationTracking)
         .where(
@@ -99,6 +108,11 @@ async def track_order(
     order = order_result.scalar_one_or_none()
     if not order:
         raise NotFoundError("Commande")
+
+    # Seuls le client de la commande, le livreur assigné, ou un manager+ peuvent la suivre.
+    is_party = current_user.id in (order.customer_id, order.rider_id)
+    if not is_party and role_level(current_user.role) < ROLE_HIERARCHY[Role.MANAGER]:
+        raise ForbiddenError("Tu n'as pas accès au suivi de cette commande")
 
     if not order.rider_id:
         return {"status": "no_rider_assigned", "tracking": None}

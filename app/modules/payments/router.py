@@ -202,15 +202,26 @@ async def stripe_webhook(
             select(Payment).where(Payment.provider_ref == session["id"])
         )
         payment = result.scalar_one_or_none()
+
         if payment:
+            if payment.status == PaymentStatus.SUCCESS:
+                # Déjà traité (Stripe peut renvoyer le même webhook plusieurs fois) — idempotent.
+                logger.info(f"[Stripe webhook] idempotent skip session={session['id']}")
+                return {"received": True}
+
             payment.status = PaymentStatus.SUCCESS
             payment.webhook_received_at = datetime.now(timezone.utc)
 
-        if order_id:
-            order_result = await db.execute(select(Order).where(Order.id == order_id))
-            order = order_result.scalar_one_or_none()
-            if order:
-                order.status = OrderStatus.CONFIRMED
+            if order_id:
+                order_result = await db.execute(
+                    select(Order).where(
+                        Order.id == order_id,
+                        Order.tenant_id == payment.tenant_id,  # isolation tenant
+                    )
+                )
+                order = order_result.scalar_one_or_none()
+                if order and order.status != OrderStatus.CONFIRMED:
+                    order.status = OrderStatus.CONFIRMED
 
     logger.info(f"[Stripe webhook] event={event['type']}")
     return {"received": True}

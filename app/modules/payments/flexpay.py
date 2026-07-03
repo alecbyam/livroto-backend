@@ -39,12 +39,18 @@ class FlexPayClient:
         """
         reference = f"LIV-{uuid4().hex[:10].upper()}"
 
+        # FlexPay attend le montant en unité pleine de `currency` (pas en centimes) :
+        # entier pour le CDF (pas de sous-unité utilisée), 2 décimales sinon.
+        # Cf. l'intégration frontend déjà en prod (flexpay.server.ts) qui envoie
+        # le même format et fonctionne — ne pas multiplier par 100 ici.
+        amount_str = str(round(amount)) if currency.upper() == "CDF" else f"{amount:.2f}"
+
         payload = {
             "merchant": self.merchant,
             "type": 1,          # 1 = Mobile Money
             "phone": phone.replace("+", "").replace(" ", ""),
             "reference": reference,
-            "amount": str(int(amount)),   # FlexPay attend un entier en centimes
+            "amount": amount_str,
             "currency": currency.upper(),
             "description": f"{description} — Réf: {order_id[:8]}",
             "callback": f"{settings.BASE_URL}/api/v1/payments/webhook/flexpay",

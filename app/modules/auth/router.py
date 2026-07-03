@@ -15,12 +15,14 @@ from app.modules.auth.schemas import (
 from app.modules.auth import service
 from app.core.security import generate_otp, verify_password, hash_password
 from app.core.exceptions import AuthError
+from app.core.limiter import limiter
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     user = await service.register_user(
         db=db,
         email=body.email,
@@ -33,7 +35,8 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
     return await service.login_user(db, body.email, body.password)
 
 
@@ -49,7 +52,9 @@ async def logout(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/otp/send")
+@limiter.limit("3/minute")
 async def send_otp(
+    request: Request,
     body: OTPRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
@@ -67,7 +72,8 @@ async def send_otp(
 
 
 @router.post("/otp/verify")
-async def verify_otp(body: OTPVerifyRequest):
+@limiter.limit("10/minute")
+async def verify_otp(request: Request, body: OTPVerifyRequest):
     from app.tasks.celery_app import redis_client
     stored = await redis_client.get(f"otp:{body.phone}")
 
